@@ -1,0 +1,230 @@
+#!/boot/home/config/bin/python
+#
+# beporter version 0.5
+
+import sys
+import os
+import re
+from optparse import OptionParser
+
+# -- Main Program ------------------------------------------------------------
+
+class BePorter:
+	def __init__(self, options, args):
+		port = args[0]
+		mainConfig = Config("/etc/BePorts.conf")
+		self.packagesPath = mainConfig.valueOf("PACKAGES_PATH")
+		hierarchy = []
+		
+		# split the argument into a port name and a version
+		reWithVersion = re.compile('^(?P<name>[a-z\-_]*)-(?P<version>([\d]+[a-z\\.])*[\d]*)?$')
+		reWithoutVersion = re.compile('^(?P<name>[a-z\-_]*)$')
+		if reWithVersion.match(port):		# with version
+			m = reWithVersion.match(port)
+			self.portName = m.group("name")
+			self.portVersion = m.group("version")
+		elif reWithoutVersion.match(port):	# without version
+			m = reWithoutVersion.match(port)
+			self.portName = m.group("name")
+			self.portVersion = None
+		else:								# invalid argument
+			print "Invalid port name: " + port
+			sys.exit()						
+		self.portCategory = None
+		
+		# find location of port in the BePorts tree
+		os.chdir(self.packagesPath)
+		dirList = os.listdir(".")
+		for item in dirList:
+			if not os.path.isdir(item):
+				index = dirList.index(item)		#TODO: clean up code
+				dirList[index:index] = []
+			else:
+				subdirList = os.listdir(item)
+				try:
+					if subdirList.index(self.portName) >= 0:
+						self.portCategory = item
+				except ValueError:
+					pass
+				hierarchy.append([item, subdirList])
+		
+		if self.portCategory == None:
+			print "Port " + self.portName + " not found. Exiting."
+			sys.exit()
+		
+		os.chdir(self.portCategory + '/' + self.portName)
+
+		# ask which version to build
+		if self.portVersion == None:
+			versions = []
+			reBepFile = re.compile('^(?P<name>[a-z\-_]*)-(?P<version>([\d]+[a-z\\.])*[\d]*)?\.bep$')
+			dirList = os.listdir(".")
+			for item in dirList:
+				m = reBepFile.match(item)
+				if m:
+					versions.append([m.group("version"), item])
+			print "Following versions of " + self.portName + " are available:"
+			for version in versions:
+				print "  " + version[0]
+			print "Run beporter again, specifiying a port version"
+			sys.exit()
+		
+		# read data from the bep file
+		bepFilename = port + ".bep"
+		if not os.path.exists(bepFilename):
+			print "Port version " + self.portVersion + " not found"
+			sys.exit()
+		bepConfig = Config(bepFilename)
+		src_uri = bepConfig.valueOf("SRC_URI")
+		src_local = src_uri[src_uri.rindex('/') + 1:]
+		unpack = bepConfig.valueOf("UNPACK")
+		depend = bepConfig.valueOf("DEPEND")
+		patch = bepConfig.valueOf("PATCH")
+		build = bepConfig.valueOf("BUILD")
+		install = bepConfig.valueOf("INSTALL")
+
+		# check dependencies
+		if depend == "":
+				print "No dependencies"
+		else:
+			if type(depend) == type([]):
+				print "This port depends on the following ports:"
+				for item in depend:
+					print "  " + item
+			elif type(depend) == type(""):
+				print "This port depends on: " + depend
+			else:
+				print "Something went horribly wrong! (dependency checking)"
+				sys.exit(1)
+			print "Please verify that you have these installed.",
+			answer = raw_input("Continue (y/n + enter)? ")
+			if answer[0].lower() == 'y':
+				print "ok"
+				pass
+			else:
+				sys.exit()
+
+		# fetch sources
+		if not os.path.exists("work"):
+			os.mkdir("work")
+		os.chdir("work")
+		print "Fetching " + src_uri + " (wget)"
+		os.system("wget -m -nd " + src_uri)
+		
+		# unpack sources
+		print "Unpacking " + src_local + " (wget)"
+		if unpack == "tgz":
+			os.system("tar xvzf " + src_local)
+		elif unpack == "tbz":
+			# TODO: does not work with old tar!!
+			os.system("tar xvjf " + src_local)
+		else:
+			sys.exit(1)
+		
+		# apply BeOS-specific patches
+		if patch == "":
+			print "No patching required"
+		else:
+			os.system("patch -p0 -i ../patches/" + patch)
+		
+		# build
+		if options.build:
+			for command in build:
+				os.system(command)
+
+		# install
+		if options.install:
+			for command in install:
+				os.system(command)
+
+
+# -- /etc/BePorts.conf and *.bep parser --------------------------------------
+
+class Config:
+	def __init__(self, filename):
+		# regular expressions for parsing the config file
+		reOptionValue	= re.compile('^(?P<key>[A-Z_]*)\s*=\s*"(?P<value>.*)(?<!\\\\)"\s*$')
+		reOptionList	= re.compile('^(?P<key>[A-Z_]*)\s*=\s*"(?P<item>.*)\s*$')
+		reLastListItem	= re.compile('^\s+(?P<item>.*)(?<!\\\\)"\s*$')
+		reListItem		= re.compile('^\s+(?P<item>.*)\s*$')
+		reComment		= re.compile('^\s*#.*$')
+		reEmptyLine		= re.compile('^\s*$')
+	
+		self.options = {}
+
+		self.filename = filename
+		self.file = open(self.filename)
+		self.lineCount = 0
+		self.nextLine()
+		while self.line != "":
+			# empty line or comment
+			if reEmptyLine.match(self.line) or reComment.match(self.line):
+				pass
+			# value option (single line) (check BEFORE list option)
+			elif reOptionValue.match(self.line):
+				#print "[OV] " + self.line.strip('\n')
+				m = reOptionValue.match(self.line)
+				self.options[m.group("key")] = m.group("value")
+			# list option (multiline)
+			elif reOptionList.match(self.line):
+				#print "[OL] " + self.line.strip('\n')
+				m = reOptionList.match(self.line)
+				key = m.group("key")
+				self.options[key] = [m.group("item")]
+				self.nextLine()
+				while self.line != "":
+					# empty line or comment
+					if reEmptyLine.match(self.line) or reComment.match(self.line):
+						pass
+					# last list item (check BEFORE list item)
+					elif reLastListItem.match(self.line):
+						#print "[LL] " + self.line.strip('\n')
+						m = reLastListItem.match(self.line)
+						self.options[key].append(m.group("item"))
+						break
+					# list item
+					elif reListItem.match(self.line):
+						#print "[LI] " + self.line.strip('\n')
+						m = reListItem.match(self.line)
+						self.options[key].append(m.group("item"))
+					# unrecognized syntax
+					else:
+						self.illegalSyntax()
+					self.nextLine()
+			# unrecognized syntax
+			else:
+				self.illegalSyntax()
+			self.nextLine()
+		self.file.close()
+		#print self.options
+		
+	def nextLine(self):
+		self.line = self.file.readline()
+		self.lineCount = self.lineCount + 1
+		
+	def illegalSyntax(self):
+		print "Illegal syntax in " + self.filename + " at line " + str(self.lineCount) + ":"
+		print "  " + self.line
+		sys.exit()
+	
+	def valueOf(self, key):
+		try:
+			value = self.options[key]
+			return value
+		except KeyError:
+			return ""
+
+
+# -- Command line argument parsing -------------------------------------------
+
+parser = OptionParser()
+parser.add_option("-b", "--nobuild",
+	action="store_false", dest="build", default=True,
+	help="don't build (and install) the sources, just download, unpack and patch")
+parser.add_option("-i", "--install",
+	action="store_true", dest="install", default=False,
+	help="install the port")
+(options, args) = parser.parse_args()
+
+beporter = BePorter(options, args)
+
