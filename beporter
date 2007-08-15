@@ -1,11 +1,76 @@
 #!/boot/home/config/bin/python
 #
-# beporter version 0.5
+# copyright 2007 Brecht Machiels
+
+info = {}
+info['version'] = "0.2 alpha"
+
+# -- Modules -----------------------------------------------------------------
 
 import sys
 import os
 import re
+import urllib
+import urllib2
+import time
+import locale
+import tarfile, zipfile
 from optparse import OptionParser
+from types import *
+
+# -- BePorts options ---------------------------------------------------------
+
+# create new type 'ShellType' for identifying lists of shell commands
+class shell(list): pass
+ShellType = shell
+
+# allowed types of the /etc/BePorts.conf values
+confTypes = {}
+confTypes['PACKAGES_PATH'] = [StringType]
+
+# allowed types of the BepFile values
+bepTypes = {}
+bepTypes['DESCRIPTION']	= [StringType, ListType]
+bepTypes['HOMEPAGE']	= [StringType]
+bepTypes['SRC_URI']		= [StringType, ListType]
+#bepTypes['UNPACK']		= [StringType]
+bepTypes['REVISION']	= [IntType]
+#bepTypes['PATCH']		= [BooleanType]		# obsolete, now determined by the presence of a patchfile
+bepTypes['WORKING']		= [BooleanType]
+bepTypes['DEPEND']		= [StringType, ListType, NoneType]
+bepTypes['BUILD']		= [ShellType]
+bepTypes['INSTALL']		= [ShellType]
+
+							# is field		default
+bepDefaults = {}			# required?		value
+bepDefaults['DESCRIPTION']	= [True,		None	]
+bepDefaults['HOMEPAGE']		= [True,		None	]
+bepDefaults['SRC_URI']		= [True,		None	]
+#bepDefaults['UNPACK']		= [False,		"tgz"	]
+bepDefaults['REVISION']		= [True,		None	]
+#bepDefaults['PATCH']		= [False,		False	]
+bepDefaults['WORKING']		= [False,		True	]
+bepDefaults['DEPEND']		= [False,		None	]
+bepDefaults['BUILD']		= [False,		shell()	]
+bepDefaults['INSTALL']		= [False,		shell()	]
+
+# names of directories
+paths = {}
+paths['work']		= "work"
+paths['patches']	= "patches"
+paths['download']	= "download"
+
+# -- downloadProgressIndicator properties ------------------------------------
+
+totalSteps = 35
+singleStep = 100.0/totalSteps
+
+# -- Set up locale for thousands seperators ----------------------------------
+def _temp(lc=locale.localeconv()):
+        lc.update({'thousands_sep':',','grouping':[3,3,0]})
+        return lc
+
+locale.localeconv=_temp
 
 # -- Main Program ------------------------------------------------------------
 
@@ -13,8 +78,17 @@ class BePorter:
 	def __init__(self, options, args):
 		port = args[0]
 		mainConfig = Config("/etc/BePorts.conf")
-		self.packagesPath = mainConfig.valueOf("PACKAGES_PATH")
-		hierarchy = []
+		self.confKeys = mainConfig.getKeys()
+		for key in self.confKeys:
+			try:
+				if type(self.confKeys[key]) not in confTypes[key]:
+					print "Invalid value type for " + key + ". Expecting " + str(confTypes[key])
+					sys.exit()
+			except KeyError, e:
+				print "Unknown key label '" + key + "' in /etc/BePorts.conf. Ignoring."
+		self.packagesPath = self.confKeys['PACKAGES_PATH']
+		if self.packagesPath[-1] == '/':	# strip trailing '/'
+			self.packagesPath = self.packagesPath[:-1]
 		
 		# split the argument into a port name and a version
 		reWithVersion = re.compile('^(?P<name>[a-z\-_]*)-(?P<version>([\d]+[a-z\\.])*[\d]*)?$')
@@ -33,14 +107,17 @@ class BePorter:
 		self.portCategory = None
 		
 		# find location of port in the BePorts tree
+		hierarchy = []
 		os.chdir(self.packagesPath)
-		dirList = os.listdir(".")
+		dirList = os.listdir(self.packagesPath)
 		for item in dirList:
-			if not os.path.isdir(item):
-				index = dirList.index(item)		#TODO: clean up code
-				dirList[index:index] = []
-			else:
+			if os.path.isdir(item) and (item[0] != '.'):
 				subdirList = os.listdir(item)
+				# remove items starting with '.'
+				subdirList.sort()
+				while subdirList[0][0] == '.':
+					del subdirList[0]
+				# locate port
 				try:
 					if subdirList.index(self.portName) >= 0:
 						self.portCategory = item
@@ -51,13 +128,17 @@ class BePorter:
 		if self.portCategory == None:
 			print "Port " + self.portName + " not found. Exiting."
 			sys.exit()
-		
-		os.chdir(self.portCategory + '/' + self.portName)
+			
+		self.portDir	= self.packagesPath + '/' + self.portCategory + '/' + self.portName
+		self.downloadDir= self.portDir + '/' + paths['download']
+		self.workDir	= self.portDir + '/' + paths['work']
+		self.patchesDir	= self.portDir + '/' + paths['patches']
 
-		# ask which version to build
+		# if the port version was not specified, list available versions
 		if self.portVersion == None:
 			versions = []
 			reBepFile = re.compile('^(?P<name>[a-z\-_]*)-(?P<version>([\d]+[a-z\\.])*[\d]*)?\.bep$')
+			os.chdir(self.packagesPath + '/' + self.portCategory + '/' + self.portName)
 			dirList = os.listdir(".")
 			for item in dirList:
 				m = reBepFile.match(item)
@@ -70,73 +151,206 @@ class BePorter:
 			sys.exit()
 		
 		# read data from the bep file
+		os.chdir(self.portDir)
 		bepFilename = port + ".bep"
 		if not os.path.exists(bepFilename):
 			print "Port version " + self.portVersion + " not found"
 			sys.exit()
 		bepConfig = Config(bepFilename)
-		src_uri = bepConfig.valueOf("SRC_URI")
-		src_local = src_uri[src_uri.rindex('/') + 1:]
-		unpack = bepConfig.valueOf("UNPACK")
-		depend = bepConfig.valueOf("DEPEND")
-		patch = bepConfig.valueOf("PATCH")
-		build = bepConfig.valueOf("BUILD")
-		install = bepConfig.valueOf("INSTALL")
+		self.bepKeys = bepConfig.getKeys()
 
-		# check dependencies
-		if depend == "":
-				print "No dependencies"
-		else:
-			if type(depend) == type([]):
-				print "This port depends on the following ports:"
-				for item in depend:
-					print "  " + item
-			elif type(depend) == type(""):
-				print "This port depends on: " + depend
-			else:
-				print "Something went horribly wrong! (dependency checking)"
-				sys.exit(1)
-			print "Please verify that you have these installed.",
-			answer = raw_input("Continue (y/n + enter)? ")
-			if answer[0].lower() == 'y':
-				print "ok"
-				pass
-			else:
-				sys.exit()
+		# check whether all required fields are present
+		for key in bepDefaults:
+			if key not in self.bepKeys and bepDefaults[key][0]:
+					print "Required field '" + key + "' not present in " + bepFilename
+					sys.exit()
 
-		# fetch sources
-		if not os.path.exists("work"):
-			os.mkdir("work")
-		os.chdir("work")
-		print "Fetching " + src_uri + " (wget)"
-		os.system("wget -m -nd " + src_uri)
+		# check validity of BepFile values
+		for key in self.bepKeys:
+			try:
+				if type(self.bepKeys[key]) not in bepTypes[key]:
+					print "Invalid value type for " + key + ". Expecting " + str(bepTypes[key])
+					sys.exit()
+			except KeyError, e:
+				print "Unknown key label '" + key + "'. Ignoring."
+
+		# set default values when not provided
+		for key in bepDefaults:
+			if key not in self.bepKeys:
+				self.bepKeys[key] = bepDefaults[key][1]
 		
-		# unpack sources
-		print "Unpacking " + src_local + " (wget)"
-		if unpack == "tgz":
-			os.system("tar xvzf " + src_local)
-		elif unpack == "tbz":
-			# TODO: does not work with old tar!!
-			os.system("tar xvjf " + src_local)
+		# convert each None/string value into a list (with respectively 0 or 1 element)
+		#	(simplifies implementation ahead)
+		for key in bepTypes:
+			if ListType in bepTypes[key]:
+				if self.bepKeys[key] == None:
+					self.bepKeys[key] = []
+				elif type(self.bepKeys[key]) == StringType:
+					self.bepKeys[key] = [self.bepKeys[key]]
+				else:
+					pass
+
+		#for key in self.bepKeys:
+		#	print key + " = " + str(self.bepKeys[key])
+		
+		# clean the work directory, if requested
+		os.chdir(self.portDir)
+		if options.clean and os.path.exists(paths['work']):
+			print "Cleaning work directory..."
+			os.system("rm -rf " + paths['work'])
+
+		self.checkDeps()	# check dependencies
+		self.fetch()		# fetch sources
+		self.unpack()		# unpack source archive
+		self.patch()		# apply patches
+		self.build()		# build
+		self.install()		# install
+		
+	def checkDeps(self):
+		if self.bepKeys['DEPEND'] == []:
+			print "No dependencies"
+			return
+		print "This port depends on the following ports:"
+		for item in self.bepKeys['DEPEND']:
+			print "  " + item
+		print "Please verify that you have these installed.",
+		answer = raw_input("Continue (y/n + enter)? ")
+		if answer == '':
+			sys.exit()
+		if answer[0].lower() == 'y':
+			print "ok"
+			pass
 		else:
-			sys.exit(1)
+			sys.exit()
 		
-		# apply BeOS-specific patches
-		if patch == "":
+	def fetch(self):
+		# create download dir
+		if not os.path.exists(self.downloadDir):
+			os.mkdir(self.downloadDir)
+		# fetch source archive
+		self.lastBytes = 0
+		self.progressSpeed = 0
+		self.timeLeft = None
+		self.lastTime = time.time()
+		os.chdir(self.downloadDir)
+		for src_uri in self.bepKeys['SRC_URI']:
+			print "Fetching " + src_uri
+			try:
+				file_uri = urllib2.urlopen(src_uri)
+				headers = file_uri.info()
+				remote_size = long(headers.getheader("Content-Length"))
+				src_uri = file_uri.geturl()
+				self.src_local = src_uri[src_uri.rindex('/') + 1:]
+				if os.path.exists(self.src_local):
+					local_size = os.stat(self.src_local).st_size
+				else:
+					local_size = 0
+				# check if file was already downloaded
+				if local_size == remote_size:
+					print '  file was already downloaded... continuing'
+				else:
+					urllib.urlretrieve(src_uri, self.src_local, self.downloadProgressIndicator)
+					print ''
+				# succesfully downloaded source archive
+				return
+			except:
+				raise
+				print "  error... trying next location"
+				continue
+		# failed to fetch source
+		print "Failed to fetch source package from all locations"
+		sys.exit()
+
+	def downloadProgressIndicator(self, *a):
+		current = float(a[0])
+		block = float(a[1])
+		total = float(a[2])
+		currentBytes = int(current * block)
+		if currentBytes > total:
+			currentBytes = total
+		percentComplete = 100 * currentBytes / (total)
+		currentStep = int(percentComplete / singleStep)
+		progressBar = '['
+		for step in range(totalSteps):
+			if step < currentStep:
+				progressBar = progressBar + '='
+			elif step == currentStep:
+				progressBar = progressBar + '>'
+			else:
+				progressBar = progressBar + ' '
+		progressBar = progressBar + ']'
+		currentTime = time.time()
+		deltaTime = currentTime - self.lastTime
+		if deltaTime > 0.5:
+			deltaBytes = currentBytes - self.lastBytes
+			self.progressSpeed = round(deltaBytes / deltaTime / 1000 , 2)
+			self.lastTime = currentTime
+			self.lastBytes = currentBytes
+			bytesLeft = total - currentBytes
+			if self.progressSpeed != 0:
+				secondsLeft = bytesLeft / self.progressSpeed / 1000
+				if secondsLeft > 3600:
+					self.timeLeft = time.strftime('%H:%M:%S', time.gmtime(secondsLeft))
+				else:
+					self.timeLeft = time.strftime('%M:%S', time.gmtime(secondsLeft))
+		
+		progressInfo = str(int(percentComplete)).rjust(3)  + '% ' \
+						+ progressBar \
+						+ ' ' + locale.format('%d', currentBytes, grouping=True).ljust(8) \
+						+ ' ' + str(self.progressSpeed).rjust(8) + 'K/s'
+		if self.timeLeft != None:
+			progressInfo = progressInfo \
+						+ '    ' + 'ETA ' + str(self.timeLeft)
+		sys.stdout.write('\r' + progressInfo)
+		sys.stdout.flush()
+
+	def unpack(self):
+		# create work dir
+		if not os.path.exists(self.workDir):
+			os.mkdir(self.workDir)
+		# unpack source archive
+		os.chdir(self.workDir)
+		print "Unpacking " + self.src_local
+		archiveFullPath = self.downloadDir + "/" + self.src_local
+		if tarfile.is_tarfile(archiveFullPath): # TODO: doesn't recognize .tar.bz2
+			# TODO: differentiate between .tar and .tar.gz
+			os.system("tar xzf " + self.downloadDir + "/" + self.src_local)
+		elif zipfile.is_zipfile(archiveFullPath):
+			os.system("unzip " + self.downloadDir + "/" + self.src_local)
+		else:
+			print "Unrecognised archive type"
+			sys.exit()
+			
+	def patch(self):
+		os.chdir(self.workDir)
+		patchFilePath = self.patchesDir + '/' + self.portName + '-' + self.portVersion + '.patch'
+		if os.path.exists(patchFilePath):
+			os.system("patch -p0 -i " + patchFilePath)
+			# TODO: check return code
+		else:
 			print "No patching required"
-		else:
-			os.system("patch -p0 -i ../patches/" + patch)
-		
-		# build
+
+	def build(self):
+		os.chdir(self.workDir)
 		if options.build:
-			for command in build:
-				os.system(command)
-
-		# install
+			buildCommands = ''
+			for command in self.bepKeys['BUILD']:
+				if buildCommands != '':
+					buildCommands = buildCommands + " && "
+				buildCommands = buildCommands + command
+			print buildCommands
+			os.system(buildCommands)
+			
+	def install(self):
+		os.chdir(self.workDir)
 		if options.install:
-			for command in install:
-				os.system(command)
-
+			installCommands = ''
+			for command in self.bepKeys['INSTALL']:
+				if installCommands != '':
+					installCommands = installCommands + " && "
+				installCommands = installCommands + command
+			print installCommands
+			os.system(installCommands)
 
 # -- /etc/BePorts.conf and *.bep parser --------------------------------------
 
@@ -147,15 +361,24 @@ class Config:
 		reOptionList	= re.compile('^(?P<key>[A-Z_]*)\s*=\s*"(?P<item>.*)\s*$')
 		reLastListItem	= re.compile('^\s+(?P<item>.*)(?<!\\\\)"\s*$')
 		reListItem		= re.compile('^\s+(?P<item>.*)\s*$')
+
+		reShellStart	= re.compile('^(?P<key>[A-Z_]*)\s*\{\s*$')
+		reShellEnd		= re.compile('^\}\s*$')
+
 		reComment		= re.compile('^\s*#.*$')
 		reEmptyLine		= re.compile('^\s*$')
-	
+		
+		reNoneType		= re.compile('^\s*$')
+		reIntType		= re.compile('^[0-9]+$')
+		reBooleanType	= re.compile('^yes$|^no$')
+		
 		self.options = {}
 
 		self.filename = filename
 		self.file = open(self.filename)
 		self.lineCount = 0
 		self.nextLine()
+		# TODO: store all options in a list?
 		while self.line != "":
 			# empty line or comment
 			if reEmptyLine.match(self.line) or reComment.match(self.line):
@@ -164,7 +387,19 @@ class Config:
 			elif reOptionValue.match(self.line):
 				#print "[OV] " + self.line.strip('\n')
 				m = reOptionValue.match(self.line)
-				self.options[m.group("key")] = m.group("value")
+				key = m.group("key")
+				value = m.group("value")
+				if reNoneType.match(value):			# NoneType
+					self.options[key] = None
+				elif reIntType.match(value):		# IntType
+					self.options[key] = int(value)
+				elif reBooleanType.match(value):	# BooleanType
+					if value == "yes":
+						self.options[key] = True
+					else:
+						self.options[key] = False
+				else:								# StringType
+					self.options[key] = value
 			# list option (multiline)
 			elif reOptionList.match(self.line):
 				#print "[OL] " + self.line.strip('\n')
@@ -191,13 +426,38 @@ class Config:
 					else:
 						self.illegalSyntax()
 					self.nextLine()
+			# shell commands (multiline)
+			elif reShellStart.match(self.line):
+				#print "[SS] " + self.line.strip('\n')
+				m = reShellStart.match(self.line)
+				key = m.group("key")
+				self.options[key] = shell()
+				self.nextLine()
+				while self.line != "":
+					# empty line or comment
+					if reEmptyLine.match(self.line) or reComment.match(self.line):
+						pass
+					# last list item (check BEFORE list item)
+					elif reShellEnd.match(self.line):
+						#print "[SE] " + self.line.strip('\n')
+						break
+					# list item
+					elif reListItem.match(self.line):
+						#print "[SI] " + self.line.strip('\n')
+						m = reListItem.match(self.line)
+						self.options[key].append(m.group("item"))
+					# unrecognized syntax
+					else:
+						self.illegalSyntax()
+					self.nextLine()
 			# unrecognized syntax
 			else:
 				self.illegalSyntax()
 			self.nextLine()
 		self.file.close()
-		#print self.options
-		
+		#for key in self.options:
+		#	print key + " = " + str(self.options[key])
+
 	def nextLine(self):
 		self.line = self.file.readline()
 		self.lineCount = self.lineCount + 1
@@ -206,25 +466,36 @@ class Config:
 		print "Illegal syntax in " + self.filename + " at line " + str(self.lineCount) + ":"
 		print "  " + self.line
 		sys.exit()
+		
+	def getKeys(self):
+		return self.options
 	
 	def valueOf(self, key):
 		try:
 			value = self.options[key]
 			return value
-		except KeyError:
+		except KeyError:	# an unspecified option is the same as an empty one
 			return ""
-
 
 # -- Command line argument parsing -------------------------------------------
 
-parser = OptionParser()
+parser = OptionParser(usage="usage: %prog [options] portname[-portversion]",
+						version="%prog " + info['version'])
 parser.add_option("-b", "--nobuild",
 	action="store_false", dest="build", default=True,
-	help="don't build (and install) the sources, just download, unpack and patch")
+	help="don't build the port, just download, unpack and patch")
 parser.add_option("-i", "--install",
 	action="store_true", dest="install", default=False,
-	help="install the port")
+	help="also install the port (the default is to only build)")
+parser.add_option("-c", "--clean",
+	action="store_true", dest="clean", default=False,
+	help="clean the working directory of the specified port")
 (options, args) = parser.parse_args()
+
+if len(args) == 0:
+	print "You need to specifiy at least a port name."
+	print "Invoke '" + sys.argv[0] + " -h' for usage information."
+	sys.exit()
 
 beporter = BePorter(options, args)
 
