@@ -3,7 +3,7 @@
 # copyright 2007 Brecht Machiels
 
 info = {}
-info['version'] = "0.2 alpha"
+info['version'] = "0.21 alpha"
 
 # -- Modules -----------------------------------------------------------------
 
@@ -19,6 +19,9 @@ from optparse import OptionParser
 from types import *
 
 # -- BePorts options ---------------------------------------------------------
+
+# location of BePorts.conf
+bePortsConf = "/etc/BePorts.conf"
 
 # create new type 'ShellType' for identifying lists of shell commands
 class shell(list): pass
@@ -41,8 +44,8 @@ bepTypes['DEPEND']		= [StringType, ListType, NoneType]
 bepTypes['BUILD']		= [ShellType]
 bepTypes['INSTALL']		= [ShellType]
 
-							# is field		default
-bepDefaults = {}			# required?		value
+							# is field	 #	default
+bepDefaults = {}			# required?	 #	value
 bepDefaults['DESCRIPTION']	= [True,		None	]
 bepDefaults['HOMEPAGE']		= [True,		None	]
 bepDefaults['SRC_URI']		= [True,		None	]
@@ -76,8 +79,8 @@ locale.localeconv=_temp
 
 class BePorter:
 	def __init__(self, options, args):
-		port = args[0]
-		mainConfig = Config("/etc/BePorts.conf")
+		# read global settings
+		mainConfig = Config(bePortsConf)
 		self.confKeys = mainConfig.getKeys()
 		for key in self.confKeys:
 			try:
@@ -85,11 +88,33 @@ class BePorter:
 					print "Invalid value type for " + key + ". Expecting " + str(confTypes[key])
 					sys.exit()
 			except KeyError, e:
-				print "Unknown key label '" + key + "' in /etc/BePorts.conf. Ignoring."
+				print "Unknown key label '" + key + "' in " + bePortsConf + ". Ignoring."
 		self.packagesPath = self.confKeys['PACKAGES_PATH']
 		if self.packagesPath[-1] == '/':	# strip trailing '/'
 			self.packagesPath = self.packagesPath[:-1]
 		
+		# if requested, list all ports in the BePorts tree
+		if options.list:
+			self.listPorts()
+			sys.exit()
+		
+		# if requested, search for a port
+		if options.search:
+			if len(args) == 0:
+				print "You need to specifiy a search string"
+				print "Invoke '" + sys.argv[0] + " -h' for usage information."
+				sys.exit()
+			self.searchPorts(args[0])
+			sys.exit()
+
+		# if there is no argument given, exit
+		if len(args) == 0:
+			print "You need to specifiy at least a port name."
+			print "Invoke '" + sys.argv[0] + " -h' for usage information."
+			sys.exit()
+		else:
+			port = args[0]
+
 		# split the argument into a port name and a version
 		reWithVersion = re.compile('^(?P<name>[a-z\-_]*)-(?P<version>([\d]+[a-z\\.])*[\d]*)?$')
 		reWithoutVersion = re.compile('^(?P<name>[a-z\-_]*)$')
@@ -104,31 +129,14 @@ class BePorter:
 		else:								# invalid argument
 			print "Invalid port name: " + port
 			sys.exit()						
-		self.portCategory = None
-		
-		# find location of port in the BePorts tree
-		hierarchy = []
-		os.chdir(self.packagesPath)
-		dirList = os.listdir(self.packagesPath)
-		for item in dirList:
-			if os.path.isdir(item) and (item[0] != '.'):
-				subdirList = os.listdir(item)
-				# remove items starting with '.'
-				subdirList.sort()
-				while subdirList[0][0] == '.':
-					del subdirList[0]
-				# locate port
-				try:
-					if subdirList.index(self.portName) >= 0:
-						self.portCategory = item
-				except ValueError:
-					pass
-				hierarchy.append([item, subdirList])
-		
+
+		# find the port in the BePorts tree
+		self.portCategory = self.getCategory(self.portName)
 		if self.portCategory == None:
 			print "Port " + self.portName + " not found. Exiting."
 			sys.exit()
-			
+
+		# create full paths for the directories
 		self.portDir	= self.packagesPath + '/' + self.portCategory + '/' + self.portName
 		self.downloadDir= self.portDir + '/' + paths['download']
 		self.workDir	= self.portDir + '/' + paths['work']
@@ -138,7 +146,7 @@ class BePorter:
 		if self.portVersion == None:
 			versions = []
 			reBepFile = re.compile('^(?P<name>[a-z\-_]*)-(?P<version>([\d]+[a-z\\.])*[\d]*)?\.bep$')
-			os.chdir(self.packagesPath + '/' + self.portCategory + '/' + self.portName)
+			os.chdir(self.portDir)
 			dirList = os.listdir(".")
 			for item in dirList:
 				m = reBepFile.match(item)
@@ -151,10 +159,32 @@ class BePorter:
 			sys.exit()
 		
 		# read data from the bep file
-		os.chdir(self.portDir)
+		self.parseBepFile()
+		
+		# clean the work directory, if requested
+		if options.clean:
+			self.clean()
+		
+		# don't build when not patching
+		if not options.patch:
+			options.build = False
+
+		self.checkDeps()	# check dependencies
+		self.fetch()		# fetch sources
+		self.unpack()		# unpack source archive
+		if options.patch:
+			self.patch()	# apply patches
+		if options.build:
+			self.build()	# build
+		if options.install:
+			self.install()	# install
+	
+	def parseBepFile(self):
+		"""Parse the BepFile of the specified port"""
 		bepFilename = port + ".bep"
+		os.chdir(self.portDir)
 		if not os.path.exists(bepFilename):
-			print "Port version " + self.portVersion + " not found"
+			print self.portName + " version " + self.portVersion + " not found"
 			sys.exit()
 		bepConfig = Config(bepFilename)
 		self.bepKeys = bepConfig.getKeys()
@@ -192,21 +222,67 @@ class BePorter:
 
 		#for key in self.bepKeys:
 		#	print key + " = " + str(self.bepKeys[key])
-		
-		# clean the work directory, if requested
-		os.chdir(self.portDir)
-		if options.clean and os.path.exists(paths['work']):
-			print "Cleaning work directory..."
-			os.system("rm -rf " + paths['work'])
 
-		self.checkDeps()	# check dependencies
-		self.fetch()		# fetch sources
-		self.unpack()		# unpack source archive
-		self.patch()		# apply patches
-		self.build()		# build
-		self.install()		# install
-		
+	def listPorts(self):
+		"""List all of the ports in the BePorts tree"""
+		hierarchy = []
+		os.chdir(self.packagesPath)
+		dirList = os.listdir(self.packagesPath)
+		for category in dirList:
+			if os.path.isdir(category) and (category[0] != '.'):
+				subdirList = os.listdir(category)
+				# remove items starting with '.'
+				subdirList.sort()
+				for portName in subdirList:
+					if portName[0][0] != '.':
+						print category + "/" + portName
+
+	def searchPorts(self, regExp):
+		"""Search for a port in the BePorts tree"""
+		reSearch = re.compile(regExp)
+		hierarchy = []
+		os.chdir(self.packagesPath)
+		dirList = os.listdir(self.packagesPath)
+		for category in dirList:
+			if os.path.isdir(category) and (category[0] != '.'):
+				subdirList = os.listdir(category)
+				# remove items starting with '.'
+				subdirList.sort()
+				for portName in subdirList:
+					if portName[0][0] != '.' and reSearch.search(portName):
+						print category + "/" + portName
+
+	def getCategory(self, portName):
+		"""Find location of the specified port in the BePorts tree"""
+		hierarchy = []
+		os.chdir(self.packagesPath)
+		dirList = os.listdir(self.packagesPath)
+		for item in dirList:
+			if os.path.isdir(item) and (item[0] != '.'):
+				subdirList = os.listdir(item)
+				# remove items starting with '.'
+				subdirList.sort()
+				while subdirList[0][0] == '.':
+					del subdirList[0]
+				# locate port
+				try:
+					if subdirList.index(portName) >= 0:
+						# port was found in the category specified by 'item'
+						return item
+				except ValueError:
+					pass
+				hierarchy.append([item, subdirList])
+		return None
+
+	def clean(self):
+		"""Clean the working directory"""
+		os.chdir(self.portDir)
+		if os.path.exists(paths['work']):
+			print "Cleaning work directory..."
+			os.system("rm -rf " + paths['work']) # TODO: replace with Python function
+
 	def checkDeps(self):
+		"""Print the list of ports this one depends on"""
 		if self.bepKeys['DEPEND'] == []:
 			print "No dependencies"
 			return
@@ -224,6 +300,7 @@ class BePorter:
 			sys.exit()
 		
 	def fetch(self):
+		"""Fetch the source archive"""
 		# create download dir
 		if not os.path.exists(self.downloadDir):
 			os.mkdir(self.downloadDir)
@@ -262,6 +339,7 @@ class BePorter:
 		sys.exit()
 
 	def downloadProgressIndicator(self, *a):
+		"""Show a progress bar, download speed and ETA"""
 		current = float(a[0])
 		block = float(a[1])
 		total = float(a[2])
@@ -305,6 +383,7 @@ class BePorter:
 		sys.stdout.flush()
 
 	def unpack(self):
+		"""Unpack the source archive (into the work directory)"""
 		# create work dir
 		if not os.path.exists(self.workDir):
 			os.mkdir(self.workDir)
@@ -322,6 +401,7 @@ class BePorter:
 			sys.exit()
 			
 	def patch(self):
+		"""Apply the BeOS patches to the source directory"""
 		os.chdir(self.workDir)
 		patchFilePath = self.patchesDir + '/' + self.portName + '-' + self.portVersion + '.patch'
 		if os.path.exists(patchFilePath):
@@ -331,26 +411,28 @@ class BePorter:
 			print "No patching required"
 
 	def build(self):
+		"""Build the sources"""
 		os.chdir(self.workDir)
-		if options.build:
-			buildCommands = ''
-			for command in self.bepKeys['BUILD']:
-				if buildCommands != '':
-					buildCommands = buildCommands + " && "
-				buildCommands = buildCommands + command
-			print buildCommands
-			os.system(buildCommands)
+		# TODO: if self.bepKeys['BUILD'] = empty, warn user
+		buildCommands = ''
+		for command in self.bepKeys['BUILD']:
+			if buildCommands != '':
+				buildCommands = buildCommands + " && "
+			buildCommands = buildCommands + command
+		print buildCommands
+		os.system(buildCommands)
 			
 	def install(self):
+		"""Install the binaries onto the system"""
 		os.chdir(self.workDir)
-		if options.install:
-			installCommands = ''
-			for command in self.bepKeys['INSTALL']:
-				if installCommands != '':
-					installCommands = installCommands + " && "
-				installCommands = installCommands + command
-			print installCommands
-			os.system(installCommands)
+		# TODO: if self.bepKeys['INSTALL'] = empty, warn user
+		installCommands = ''
+		for command in self.bepKeys['INSTALL']:
+			if installCommands != '':
+				installCommands = installCommands + " && "
+			installCommands = installCommands + command
+		print installCommands
+		os.system(installCommands)
 
 # -- /etc/BePorts.conf and *.bep parser --------------------------------------
 
@@ -481,6 +563,15 @@ class Config:
 
 parser = OptionParser(usage="usage: %prog [options] portname[-portversion]",
 						version="%prog " + info['version'])
+parser.add_option("-l", "--list",
+	action="store_true", dest="list", default=False,
+	help="list available ports")
+parser.add_option("-s", "--search",
+	action="store_true", dest="search", default=False,
+	help="search for a port (regex)")
+parser.add_option("-p", "--nopatch",
+	action="store_false", dest="patch", default=True,
+	help="don't patch the sources, just download and unpack")
 parser.add_option("-b", "--nobuild",
 	action="store_false", dest="build", default=True,
 	help="don't build the port, just download, unpack and patch")
@@ -491,11 +582,6 @@ parser.add_option("-c", "--clean",
 	action="store_true", dest="clean", default=False,
 	help="clean the working directory of the specified port")
 (options, args) = parser.parse_args()
-
-if len(args) == 0:
-	print "You need to specifiy at least a port name."
-	print "Invoke '" + sys.argv[0] + " -h' for usage information."
-	sys.exit()
 
 beporter = BePorter(options, args)
 
