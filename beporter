@@ -1,9 +1,9 @@
 #!/boot/home/config/bin/python
 #
-# copyright 2007 Brecht Machiels
+# copyright 2007-2008 Brecht Machiels
 
 info = {}
-info['version'] = "0.21 alpha"
+info['version'] = "0.22 alpha"
 
 # -- Modules -----------------------------------------------------------------
 
@@ -18,10 +18,10 @@ import tarfile, zipfile
 from optparse import OptionParser
 from types import *
 
-# -- BePorts options ---------------------------------------------------------
+# -- HaikuPorts options ---------------------------------------------------------
 
-# location of BePorts.conf
-bePortsConf = "/etc/BePorts.conf"
+# location of haikuports.conf
+haikuPortsConf = "/etc/haikuports.conf"
 
 # create new type 'ShellType' for identifying lists of shell commands
 class shell(list): pass
@@ -32,7 +32,7 @@ ShellType = shell
 class status(str): pass
 StatusType = status
 
-# allowed types of the /etc/BePorts.conf values
+# allowed types of the /etc/haikuports.conf values
 confTypes = {}
 confTypes['PACKAGES_PATH'] = [StringType]
 
@@ -97,7 +97,7 @@ locale.localeconv=_temp
 class BePorter:
 	def __init__(self, options, args):
 		# read global settings
-		mainConfig = Config(bePortsConf)
+		mainConfig = Config(haikuPortsConf)
 		self.confKeys = mainConfig.getKeys()
 		for key in self.confKeys:
 			try:
@@ -105,12 +105,12 @@ class BePorter:
 					print "Invalid value type for " + key + ". Expecting " + str(confTypes[key])
 					sys.exit()
 			except KeyError, e:
-				print "Unknown key label '" + key + "' in " + bePortsConf + ". Ignoring."
+				print "Unknown key label '" + key + "' in " + haikuPortsConf + ". Ignoring."
 		self.packagesPath = self.confKeys['PACKAGES_PATH']
 		if self.packagesPath[-1] == '/':	# strip trailing '/'
 			self.packagesPath = self.packagesPath[:-1]
 		
-		# if requested, list all ports in the BePorts tree
+		# if requested, list all ports in the HaikuPorts tree
 		if options.list:
 			self.listPorts()
 			sys.exit()
@@ -147,7 +147,7 @@ class BePorter:
 			print "Invalid port name: " + port
 			sys.exit()						
 
-		# find the port in the BePorts tree
+		# find the port in the HaikuPorts tree
 		self.portCategory = self.getCategory(self.portName)
 		if self.portCategory == None:
 			print "Port " + self.portName + " not found. Exiting."
@@ -281,7 +281,7 @@ class BePorter:
 			return None
 
 	def listPorts(self):
-		"""List all of the ports in the BePorts tree"""
+		"""List all of the ports in the HaikuPorts tree"""
 		hierarchy = []
 		os.chdir(self.packagesPath)
 		dirList = os.listdir(self.packagesPath)
@@ -295,7 +295,7 @@ class BePorter:
 						print category + "/" + portName
 
 	def searchPorts(self, regExp):
-		"""Search for a port in the BePorts tree"""
+		"""Search for a port in the HaikuPorts tree"""
 		reSearch = re.compile(regExp)
 		hierarchy = []
 		os.chdir(self.packagesPath)
@@ -310,7 +310,7 @@ class BePorter:
 						print category + "/" + portName
 
 	def getCategory(self, portName):
-		"""Find location of the specified port in the BePorts tree"""
+		"""Find location of the specified port in the HaikuPorts tree"""
 		hierarchy = []
 		os.chdir(self.packagesPath)
 		dirList = os.listdir(self.packagesPath)
@@ -491,7 +491,7 @@ class BePorter:
 		print installCommands
 		os.system(installCommands)
 
-# -- /etc/BePorts.conf and *.bep parser --------------------------------------
+# -- /etc/haikuports.conf and *.bep parser -----------------------------------
 
 class Config:
 	def __init__(self, filename):
