@@ -1,6 +1,7 @@
 #!/boot/home/config/bin/python
 #
-# copyright 2007-2008 Brecht Machiels
+# copyright 2007-2009 Brecht Machiels
+# copyright 2009 HaikuBot
 
 info = {}
 info['version'] = "0.22 alpha"
@@ -15,37 +16,41 @@ import urllib2
 import time
 import locale
 import tarfile, zipfile
+import types
 from optparse import OptionParser
-from types import *
 
-# -- HaikuPorts options ---------------------------------------------------------
+# -- HaikuPorts options ------------------------------------------------------
 
 # location of haikuports.conf
 haikuPortsConf = "/etc/haikuports.conf"
 
 # create new type 'ShellType' for identifying lists of shell commands
-class shell(list): pass
+class shell(list):
+	pass
+	
 ShellType = shell
 
 # create new type 'StatusType' for identifying the port's status on a platform
 #  the possible states are defined in the 'Config' class (reStatusType)
-class status(str): pass
+class status(str):
+	pass
+	
 StatusType = status
 
 # allowed types of the /etc/haikuports.conf values
 confTypes = {}
-confTypes['PACKAGES_PATH'] = [StringType]
+confTypes['PACKAGES_PATH'] = [types.StringType]
 
 # allowed types of the BepFile values
 bepTypes = {}
-bepTypes['DESCRIPTION']	= [StringType, ListType]
-bepTypes['HOMEPAGE']	= [StringType]
-bepTypes['SRC_URI']		= [StringType, ListType]
-bepTypes['REVISION']	= [IntType]
+bepTypes['DESCRIPTION']	= [types.StringType, types.ListType]
+bepTypes['HOMEPAGE']	= [types.StringType]
+bepTypes['SRC_URI']		= [types.StringType, types.ListType]
+bepTypes['REVISION']	= [types.IntType]
 bepTypes['STATUS_R5']	= [StatusType]
 bepTypes['STATUS_BONE']	= [StatusType]
 bepTypes['STATUS_HAIKU']= [StatusType]
-bepTypes['DEPEND']		= [StringType, ListType, NoneType]
+bepTypes['DEPEND']		= [types.StringType, types.ListType, types.NoneType]
 bepTypes['BUILD']		= [ShellType]
 bepTypes['INSTALL']		= [ShellType]
 
@@ -99,6 +104,7 @@ class BePorter:
 		# read global settings
 		mainConfig = Config(haikuPortsConf)
 		self.confKeys = mainConfig.getKeys()
+		
 		for key in self.confKeys:
 			try:
 				if type(self.confKeys[key]) not in confTypes[key]:
@@ -106,21 +112,25 @@ class BePorter:
 					sys.exit()
 			except KeyError, e:
 				print "Unknown key label '" + key + "' in " + haikuPortsConf + ". Ignoring."
+				
 		self.packagesPath = self.confKeys['PACKAGES_PATH']
-		if self.packagesPath[-1] == '/':	# strip trailing '/'
+		
+		if self.packagesPath[-1] == '/':
+			# strip trailing '/'
 			self.packagesPath = self.packagesPath[:-1]
 		
 		# if requested, list all ports in the HaikuPorts tree
 		if options.list:
 			self.listPorts()
 			sys.exit()
-		
+
 		# if requested, search for a port
 		if options.search:
 			if len(args) == 0:
 				print "You need to specifiy a search string"
 				print "Invoke '" + sys.argv[0] + " -h' for usage information."
 				sys.exit()
+				
 			self.searchPorts(args[0])
 			sys.exit()
 
@@ -158,7 +168,7 @@ class BePorter:
 		self.downloadDir= self.portDir + '/' + paths['download']
 		self.workDir	= self.portDir + '/' + paths['work']
 		self.patchesDir	= self.portDir + '/' + paths['patches']
-
+	
 		# if the port version was not specified, list available versions
 		if self.portVersion == None:
 			versions = []
@@ -173,6 +183,11 @@ class BePorter:
 			for version in versions:
 				print "  " + version[0]
 			print "Run beporter again, specifiying a port version"
+			sys.exit()
+			
+		# show port description, if requested
+		if options.desc:
+			self.desc()
 			sys.exit()
 		
 		# read data from the bep file
@@ -193,7 +208,7 @@ class BePorter:
 					pass
 				else:
 					sys.exit()
-
+						
 		# clean the work directory, if requested
 		if options.clean:
 			self.clean()
@@ -212,6 +227,51 @@ class BePorter:
 		if options.install:
 			self.install()	# install
 
+	def desc(self):
+		"""Show port description"""
+		os.chdir(self.portDir)
+				
+		bepFilename = self.portName + '-' + self.portVersion + ".bep"
+		
+		reOptionValue	= re.compile('^(?P<key>[A-Z0-9_]*)\s*=\s*"(?P<value>.*)(?<!\\\\)"\s*$')
+		reComment		= re.compile('^\s*#.*$')
+		reEmptyLine		= re.compile('^\s*$')
+				
+		if not os.path.exists(bepFilename):
+			print self.portName + " version " + self.portVersion + " not found"
+			sys.exit()
+					
+				
+		fp = open(bepFilename)
+		lineCount = 0
+		
+		line = fp.readline()
+		lineCount += 1
+		
+		print '*'*80
+		
+		while line != "":
+			# empty line or comment
+			if reEmptyLine.match(line) or reComment.match(line):
+				pass
+			# value option (single line) (check BEFORE list option)
+			elif reOptionValue.match(line):
+				m = reOptionValue.match(line)
+				key = m.group("key")
+				value = m.group("value")
+				
+				if 'DESCRIPTION' in key:
+					print key.capitalize()+":",value
+				elif 'HOMEPAGE' in key:
+					print key.capitalize()+":",value
+				
+			line = fp.readline()
+			lineCount += 1
+			
+		print '*'*80
+		
+		fp.close()
+			
 	def parseBepFile(self):
 		"""Parse the BepFile of the specified port"""
 		os.chdir(self.portDir)
@@ -245,10 +305,10 @@ class BePorter:
 		# convert each None/string value into a list (with respectively 0 or 1 element)
 		#	(simplifies implementation ahead)
 		for key in bepTypes:
-			if ListType in bepTypes[key]:
+			if types.ListType in bepTypes[key]:
 				if self.bepKeys[key] == None:
 					self.bepKeys[key] = []
-				elif type(self.bepKeys[key]) == StringType:
+				elif type(self.bepKeys[key]) == types.StringType:
 					self.bepKeys[key] = [self.bepKeys[key]]
 				else:
 					pass
@@ -623,24 +683,35 @@ class Config:
 
 parser = OptionParser(usage="usage: %prog [options] portname[-portversion]",
 						version="%prog " + info['version'])
+						
 parser.add_option("-l", "--list",
 	action="store_true", dest="list", default=False,
 	help="list available ports")
+	
+parser.add_option("-d", "--desc",
+	action="store_true", dest="desc", default=False,
+	help="show port description")
+	
 parser.add_option("-s", "--search",
 	action="store_true", dest="search", default=False,
 	help="search for a port (regex)")
+	
 parser.add_option("-p", "--nopatch",
 	action="store_false", dest="patch", default=True,
 	help="don't patch the sources, just download and unpack")
+	
 parser.add_option("-b", "--nobuild",
 	action="store_false", dest="build", default=True,
 	help="don't build the port, just download, unpack and patch")
+	
 parser.add_option("-i", "--install",
 	action="store_true", dest="install", default=False,
 	help="also install the port (the default is to only build)")
+	
 parser.add_option("-c", "--clean",
 	action="store_true", dest="clean", default=False,
 	help="clean the working directory of the specified port")
+	
 (options, args) = parser.parse_args()
 
 beporter = BePorter(options, args)
