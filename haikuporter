@@ -137,8 +137,8 @@ class BePorter:
 			port = args[0]
 
 		# split the argument into a port name and a version
-		reWithVersion = re.compile('^(?P<name>[a-z\-_]*)-(?P<version>([\d]+[a-z\\.])*[\d]*)?$')
-		reWithoutVersion = re.compile('^(?P<name>[a-z\-_]*)$')
+		reWithVersion = re.compile('^(?P<name>[a-z0-9\-_]*)-(?P<version>([\d]+[a-z\\.])*[\d]*)?$')
+		reWithoutVersion = re.compile('^(?P<name>[a-z0-9\-_]*)$')
 		if reWithVersion.match(port):		# with version
 			m = reWithVersion.match(port)
 			self.portName = m.group("name")
@@ -166,7 +166,7 @@ class BePorter:
 		# if the port version was not specified, list available versions
 		if self.portVersion == None:
 			versions = []
-			reBepFile = re.compile('^(?P<name>[a-z\-_]*)-(?P<version>([\d]+[a-z\\.])*[\d]*)?\.bep$')
+			reBepFile = re.compile('^(?P<name>[a-z0-9\-_]*)-(?P<version>([\d]+[a-z\\.])*[\d]*)?\.bep$')
 			os.chdir(self.portDir)
 			dirList = os.listdir(".")
 			for item in dirList:
