@@ -1,4 +1,5 @@
 import re
+import sys
 
 
 class Parser(dict):
@@ -69,7 +70,7 @@ class Parser(dict):
                             m = self.re_list_item.match(line)
                             self[key].append(m.group('item'))
                         else:
-                            self.illegal_syntax()
+                            self.illegal_syntax(line)
                         line = self.next_line()
                 elif self.re_shell_start.match(line):
                     # print "[SS] " + line.strip('\n')
@@ -87,12 +88,12 @@ class Parser(dict):
                         elif self.re_list_item.match(line):
                             # print "[SI] " + line.strip('\n')
                             m = self.re_list_item.match(line)
-                            self[key].append(m.group('item'))
+                            self[key].append(m.group('item') + '\n')
                         else:
-                            self.illegal_syntax()
+                            self.illegal_syntax(line)
                         line = self.next_line()
                 else:
-                    self.illegal_syntax()
+                    self.illegal_syntax(line)
                 line = self.next_line()
         except StopIteration:
             pass
@@ -108,9 +109,9 @@ class Parser(dict):
         self.line_count = self.line_count + 1
         return next(self.file)
 
-    def illegal_syntax(self):
+    def illegal_syntax(self, line):
         print 'Error: Illegal syntax in %s at line %d:' % (self.filename,
-                                                           line_count)
+                                                           self.line_count)
         print '  ' + line
         sys.exit(1)
 

@@ -13,22 +13,44 @@ class Builder(object):
     def __init__(self, options, arguments):
         self.config = Config(self.config_path,
                              open(self.config_path).readlines())
-        self.source = (SVNRepository(self.config['PACKAGES_PATH'])
-                       if options.local else HaikuPortsWebsite())
+        self.source = (SVNRepository(self.config)
+                       if options.local else HaikuPortsWebsite(self.config))
         if options.list:
         	self.list_ports()
         elif options.about:
             self.about(arguments)
         elif options.search:
             self.search(arguments)
+        elif len(arguments) == 0:
+            print("You need to specifiy a port to build.\n"
+                  "Invoke '{0} -h' for usage information.".format(sys.argv[0]))
         else:
-            self.build(options, arguments)
-        
+            try:
+                port, version_revision = arguments[0].split('-', 1)
+                version, revision = version_revision.rsplit('-', 1)
+                recipe = self.source.recipe(options, port, version, revision)
+
+                if options.clean:
+                    recipe.clean_build_directory()
+
+                self.build(recipe)
+            except ValueError:
+                try: 
+                    options = list(self.list_options(arguments[0]))
+                    print('available options:')
+                    for option in options:
+                        print(' * {0}'.format(option))
+                except ResourceNotFound as e:
+                    print(e.msg)
+            except ResourceNotFound as e:
+                print(e.msg)
+
     def list_ports(self):
         for port in self.source.ports(meta=True):
         	print('{category}/{name}'.format(**port))
         
     def about(self, arguments):
+        # TODO: generalize for ports, versions, revisions
         for port in arguments:
             try:
                 metadata = self.source.port(port)
@@ -55,15 +77,43 @@ class Builder(object):
             print "Invoke '" + sys.argv[0] + " -h' for usage information."
             sys.exit(1)
 
-    def build(self, options, arguments):
-        port = arguments[0]
-        if options.patch:
-            self.source.port(port).patch()
-        if options.build:
-            self.source.port(port).build()
-        if options.install:
-            self.source.port(port).install()
-	    pass
+    def list_options(self, string):
+        try:
+            port, ver_rev = string.split('-', 1)
+            if not ver_rev:
+                raise ValueError
+            try:
+                version, revision = ver_rev.rsplit('-', 1)
+                if not revision:
+                    raise ValueError
+                if revision not in self.source.revisions(port, version):
+                    raise ResourceNotFound('unknown revision: ' + revision)
+                else:
+                    yield None
+            except ValueError:
+                if ver_rev not in self.source.versions(port):
+                    raise ResourceNotFound('unknown version: ' + ver_rev)
+                else:
+                    for revision in self.source.revisions(port, ver_rev):
+                        yield port + '-' + ver_rev + '-' + str(revision)
+        except ValueError:
+            if string not in self.source.ports():
+                raise ResourceNotFound('unknown port: ' + string)
+            else:
+                for version in self.source.versions(string):
+                    yield string + '-' + version        
+
+    def build(self, recipe):
+        # TODO: move to Recipe.execute()?
+        recipe.download()
+        recipe.unpack()
+        #recipe.checksum()
+        if recipe.options.patch:
+            recipe.patch()
+        if recipe.options.build:
+            recipe.build()
+        if recipe.options.install:
+            recipe.install()
 
 
 def main():
@@ -96,22 +146,22 @@ def main():
 #                     default=False, help="make distribution package of the "
 #                                         "specified port (include download, "
 #                                         "unpack, patch, build)")
-#   parser.add_option('-c', '--clean', action='store_true', dest='clean',
-#                     default=False, help="clean the working directory of the "
-#                                         "specified port")
+   parser.add_option('-c', '--clean', action='store_true', dest='clean',
+                     default=False, help="clean the working directory of the "
+                                         "specified port")
 #   parser.add_option('-g', '--get', action='store_true', dest='get',
 #                     default=False, help="get/update the ports tree")
-#   parser.add_option('-f', '--force', action='store_true', dest='force',
-#                     default=False, help="force to perform the steps (unpack, "
-#                                         "patch, build)")
+   parser.add_option('-f', '--force', action='store_true', dest='force',
+                     default=False, help="force to perform the steps (unpack, "
+                                         "patch, build)")
 #   parser.add_option('-z', '--archive', action='store_true', dest='archive',
 #                     default=False, help="Create a patched source archive as "
 #                                         "<package>_haiku.tar.xz")
 #   parser.add_option('-t', '--tree', action='store_true', dest='tree',
 #                     default=False, help="print out the location of the "
 #                                         "haikuports source tree")
-#   parser.add_option('-y', '--yes', action='store_true', dest='yes',
-#                     default=False, help="answer yes to all questions")
+   parser.add_option('-y', '--yes', action='store_true', dest='yes',
+                     default=False, help="answer yes to all questions")
 
 #   parser.add_option('--test', action='store_true', dest='test',
 #                     default=False, help="run tests on resulting binaries")
