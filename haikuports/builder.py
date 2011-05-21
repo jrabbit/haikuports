@@ -1,6 +1,8 @@
 from optparse import OptionParser
+import os
 import re
 import sys
+from subprocess import check_call, CalledProcessError
 
 from . import __version__
 from .config import Config
@@ -9,12 +11,17 @@ from .source import HaikuPortsWebsite, SVNRepository, ResourceNotFound
 
 class Builder(object):
     config_path = '/boot/common/etc/haikuports.conf'
+    repository_path = 'http://ports.haiku-files.org/svn/haikuports/trunk'
 
     def __init__(self, options, arguments):
-        self.config = Config(self.config_path,
-                             open(self.config_path).readlines())
+        self.config = Config(self.config_path)
         self.source = (SVNRepository(self.config)
                        if options.local else HaikuPortsWebsite(self.config))
+
+        if options.get:
+            self.update_ports_tree()
+            return
+
         if options.list:
         	self.list_ports()
         elif options.about:
@@ -65,6 +72,17 @@ class Builder(object):
             except ResourceNotFound as m:
                 print(m)
 
+    def update_ports_tree(self):
+        """Get or update the ports tree via Subversion"""
+        recipes_path = self.config['REPOSITORY_PATH']
+        if os.path.exists(recipes_path + os.path.sep + '.svn'):
+            print('Updating the HaikuPorts tree:')
+            check_call(['svn', 'update', recipes_path])
+        else:
+            print('Checking out the HaikuPorts tree to '
+                  '{0}'.format(recipes_path))
+            check_call(['svn', 'checkout', self.repository_path, recipes_path])
+
     def search(self, arguments):
         """Search for a port in the HaikuPorts tree"""
         try:
@@ -106,12 +124,14 @@ class Builder(object):
     def build(self, recipe):
         # TODO: move to Recipe.execute()?
         recipe.download()
+        recipe.checksum()
         recipe.unpack()
-        #recipe.checksum()
         if recipe.options.patch:
             recipe.patch()
         if recipe.options.build:
             recipe.build()
+        if recipe.options.test:
+            recipe.test()
         if recipe.options.install:
             recipe.install()
 
@@ -149,8 +169,8 @@ def main():
    parser.add_option('-c', '--clean', action='store_true', dest='clean',
                      default=False, help="clean the working directory of the "
                                          "specified port")
-#   parser.add_option('-g', '--get', action='store_true', dest='get',
-#                     default=False, help="get/update the ports tree")
+   parser.add_option('-g', '--get', action='store_true', dest='get',
+                     default=False, help="get/update the ports tree")
    parser.add_option('-f', '--force', action='store_true', dest='force',
                      default=False, help="force to perform the steps (unpack, "
                                          "patch, build)")
@@ -163,8 +183,8 @@ def main():
    parser.add_option('-y', '--yes', action='store_true', dest='yes',
                      default=False, help="answer yes to all questions")
 
-#   parser.add_option('--test', action='store_true', dest='test',
-#                     default=False, help="run tests on resulting binaries")
+   parser.add_option('--test', action='store_true', dest='test',
+                     default=False, help="run tests on resulting binaries")
 #   parser.add_option('--lint', action='store_true', dest='lint',
 #                     default=False, help="scan the ports tree for problems")
 

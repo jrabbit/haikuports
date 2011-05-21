@@ -34,8 +34,7 @@ class ConnectionError(Exception):
 
 
 class HaikuPortsWebsite(Source):
-    base_url = 'http://ports.haiku-files.org/future/bep'
-    #base_url = 'http://192.168.198.1/HaikuPorts-trac/bep'
+    base_url = 'http://ports.haiku-files.org/bep'
     extension = '.bep'
 
     def __init__(self, config):
@@ -49,8 +48,8 @@ class HaikuPortsWebsite(Source):
         try:
             url_file = urllib2.urlopen(url)
             return json.loads(url_file.read())
-        except urllib2.URLError:
-            raise ConnectionError
+        except urllib2.URLError as m:
+            raise ConnectionError(m)
 
     def categories(self, meta=False):
         url = self.base_url + '/'
@@ -99,7 +98,7 @@ class HaikuPortsWebsite(Source):
 class SVNRepository(Source):
     def __init__(self, config):
         super(SVNRepository, self).__init__(config)
-        self.path = self.config['PACKAGES_PATH']
+        self.path = self.config['REPOSITORY_PATH']
     
     def update(self):
         raise NotImplementedError

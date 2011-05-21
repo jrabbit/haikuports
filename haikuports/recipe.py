@@ -1,3 +1,4 @@
+import hashlib
 import os
 import shutil
 import sys
@@ -41,6 +42,10 @@ class Recipe(object):
     def _message(self, msg):
         print('\033[1m' + msg + '...\033[0m')
     
+    def _error(self, msg, rc=1):
+        print('\033[31mError:\033[0m ' + msg)
+        sys.exit(rc)
+    
     def retrieve_sources(self):
         raise NotImplementedError
         # download, checksum, unpack
@@ -53,19 +58,34 @@ class Recipe(object):
         url = urllib2.urlopen(url).geturl()
         
         self.archive = url.rsplit('/', 1)[1]
-        target_dir = self.config['DOWNLOAD_PATH']
-        if os.path.isfile(target_dir + os.path.sep + self.archive):
+        self.archive_path = self.download_directory + os.path.sep + self.archive
+        if os.path.isfile(self.archive_path):
             print('File already exists: {0}\n'
                   'Skipping download ...'.format(self.archive))
         else:
-            if not os.path.exists(target_dir):
-                os.makedirs(target_dir)
+            if not os.path.exists(self.download_directory):
+                os.makedirs(self.download_directory)
             print('Downloading: {0}'.format(url))
-            check_call(['wget', '-c', '--tries=3', '-P', target_dir, url],
-                       cwd=self.download_directory)
+            check_call(['wget', '-c', '--tries=3', '-P',
+                        self.download_directory, url])
     
-    def checksum(self, archive, hash):
-        raise NotImplementedError
+    def checksum(self, reference):
+        self._message('Verifying checksum')
+        hash = hashlib.md5()
+        archive = open(self.archive_path, 'rb')
+        while True:
+            buffer = archive.read(16384)
+            if not buffer:
+                break
+            hash.update(buffer)
+        archive.close()
+        if hash.hexdigest() == reference.lower():
+            print('OK')
+        else:
+            print('FAILED\n'
+                  ' Expected: {0}\n'
+                  ' Found: {1}'.format(reference, hash.hexdigest()))
+            sys.exit(1)
     
     def unpack(self):
         """Unpack the source archive into the work directory"""
@@ -73,18 +93,18 @@ class Recipe(object):
             return
 
         self._message('Unpacking ' + self.archive)
-        archive_path = self.download_directory + os.path.sep + self.archive
-        if tarfile.is_tarfile(archive_path):
-            tf = tarfile.open(archive_path)
+        
+        if tarfile.is_tarfile(self.archive_path):
+            tf = tarfile.open(self.archive_path)
             tf.extractall(self.build_directory)
             tf.close()
-        elif zipfile.is_zipfile(archive_path):
-            zf = zipfile.ZipFile(archive_path)
+        elif zipfile.is_zipfile(self.archive_path):
+            zf = zipfile.ZipFile(self.archive_path)
             zf.extractall(self.build_directory)
             zf.close()
-        elif archive_path.rsplit('.', 1)[1] == 'xz':
+        elif self.archive_path.rsplit('.', 1)[1] == 'xz':
             def unpack_xz():
-                check_call(['xz', '-d', '-k', archive_path],
+                check_call(['xz', '-d', '-k', self.archive_path],
                            cwd=self.build_directory)
 
             try:
@@ -104,7 +124,7 @@ class Recipe(object):
             sys.exit('Error: Unrecognized archive type.')
 
         self.set_flag('unpack')
-    
+        
     def checkout(self, url):
         raise NotImplementedError
     
@@ -112,7 +132,6 @@ class Recipe(object):
         if not self.check_flag('patch'):
             check_call('patch -p0 -i {0}'.format(patch),
                        shell=True, cwd=self.build_directory)
-            # TODO: check rc
             self.set_flag('patch')
     
     def build(self, script):
@@ -120,13 +139,13 @@ class Recipe(object):
         if not self.check_flag('build'):
             self._run_script(script)
             self.set_flag('build')
-    	
+
     def test(self, script):
         self._message('Running tests')
         if not self.check_flag('test'):
             self._run_script(script)
             self.set_flag('test')
-    	
+
     def install(self, script, target_directory):
         self._message('Installing to ' + target_directory)
         if not self.check_flag('install'):
@@ -134,8 +153,8 @@ class Recipe(object):
             self.set_flag('install')
 
     def clean_build_directory(self):
-	    self._message('Cleaning build directory')
-	    shutil.rmtree(self.build_directory)
+        self._message('Cleaning build directory')
+        shutil.rmtree(self.build_directory)
 
     def set_flag(self, flag):
         flag_path = self.build_directory + os.path.sep + flag
@@ -184,16 +203,17 @@ class HPB(Parser, Recipe):
             'INSTALL': RequiredKey([shell]),
             'LICENSE': RequiredKey([str, list]),
             
-            # not yet supported by the portlog plugin
             'CHECKSUM_MD5': RequiredKey([str]),
             'TEST': OptionalKey([shell], None),
+
+            # not yet supported by the portlog plugin
             'MESSAGE': OptionalKey([str], None),
             'COPYRIGHT': OptionalKey([str, list], None)
            }
 
     def __init__(self, config, options, filename, file):
-    	super(HPB, self).__init__(filename, file)
-    	Recipe.__init__(self, config, options, filename.rsplit('.', 1)[0])
+        super(HPB, self).__init__(filename, file)
+        Recipe.__init__(self, config, options, filename.rsplit('.', 1)[0])
     
     def validate(self, verbose=False):
         """Validate the keys"""
@@ -201,22 +221,34 @@ class HPB(Parser, Recipe):
         # verify key values...
 
     def download(self):
+        if 'SRC_URI' not in self:
+            self._error('no sources URL given in recipe')
         return super(HPB, self).download(self['SRC_URI'])
 
+    def checksum(self):
+        reference = self['CHECKSUM_MD5']
+        if not reference:
+            self._message('No checksum provided in recipe')
+        else:
+            super(HPB, self).checksum(reference)
+
     def patch(self):
-        return
-        patch_path = self.base_path + '.patch'
-        if os.path.exists(patch_path):
-        	return super(Scripts, self).patch(patch_path)
-       	else:
-       	    print('No patching required')
+        if 'PATCH' in self:
+            patch_path = (self.build_directory + os.sep +
+                          self.base_name + '.patch')
+            patch_file = open(patch_path, 'w')
+            patch_file.writelines(self['PATCH'])
+            patch_file.close()
+            return super(HPB, self).patch(patch_path)
+        else:
+            self._message('No patching required')
 
     def build(self):
         return super(HPB, self).build(self['BUILD'])
-    	
+
     def test(self):
         return super(HPB, self).test(self['TEST'])
-    	
+
     def install(self, target_directory):
         return super(HPB, self).test(self['INSTALL'], directory, target_directory)
 
@@ -234,16 +266,16 @@ class Scripts(HPB):
     def patch(self):
         patch_path = self.base_path + '.patch'
         if os.path.exists(patch_path):
-        	return Recipe.patch(self, patch_path)
-       	else:
-       	    print('No patching required')
+            return Recipe.patch(self, patch_path)
+        else:
+            print('No patching required')
 
     def build(self):
         return Recipe.build(self, self._read_script('build'))
-    	
+
     def test(self):
         return Recipe.test(self, self._read_script('test'))
-    	
+
     def install(self, target_directory):
         return Recipe.install(self, self._read_script('install'))
 

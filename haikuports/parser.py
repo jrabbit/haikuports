@@ -11,8 +11,9 @@ class Parser(dict):
                                 '\s*"(?P<item>.*)\s*$')
     re_last_list_item = re.compile('^\s+(?P<item>.*)(?<!\\\\)"\s*$')
     re_list_item = re.compile('^\s+(?P<item>.*)\s*$')
-    re_shell_start = re.compile('^(?P<key>[A-Z_]*)\s*\{\s*$')
-    re_shell_end = re.compile('^\}\s*$')
+    re_shell_start = re.compile('^(?P<key>[A-Z_]*)\s*\{\s*(#.*)?$')
+    re_shell_item = re.compile('^\t(?P<item>.*)\s*$')
+    re_shell_end = re.compile('^\}\s*(#.*)?$')
     re_comment = re.compile('^\s*#.*$')
     re_empty_line = re.compile('^\s*$')
     re_none = re.compile('^\s*$')
@@ -22,8 +23,11 @@ class Parser(dict):
     keys = {}
     defaults = {}
 	
-    def __init__(self, filename, file):
+    def __init__(self, filename, file=None):
         self.filename = filename
+        if file is None:
+            return
+
         self.file = iter(file)
         self.line_count = 0
         
@@ -79,15 +83,12 @@ class Parser(dict):
                     self[key] = shell()
                     line = self.next_line()
                     while line != '':
-                        if (self.re_empty_line.match(line) or
-                            self.re_comment.match(line)):
-                            pass
-                        elif self.re_shell_end.match(line):
+                        if self.re_shell_end.match(line):
                             # print "[SE] " + line.strip('\n')
                             break
-                        elif self.re_list_item.match(line):
+                        elif self.re_shell_item.match(line):
                             # print "[SI] " + line.strip('\n')
-                            m = self.re_list_item.match(line)
+                            m = self.re_shell_item.match(line)
                             self[key].append(m.group('item') + '\n')
                         else:
                             self.illegal_syntax(line)
