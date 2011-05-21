@@ -1,0 +1,24 @@
+Installing
+==========
+
+* Install the haikuports package:
+
+    python setup.py install
+
+* Optionally, copy haikuports.conf to /boot/common/etc and adjust it to override
+  the default paths
+
+
+Usage
+=====
+
+After installation, run 'hpbuild -h' for usage information.
+
+In contrast with haikuporter, hpbuild doesn't require a local copy of the
+haikuports tree. You can still checkout the tree using the '-g' option. When
+you're working on a port, you should pass the '-r' flag to hpbuild to tell it
+to use the local build/test/install scripts and patch instead of fetching them
+from the HaikuPorts website.
+
+Look at sys-devel/distcc to see how the the scripts and patch should be named.
+
