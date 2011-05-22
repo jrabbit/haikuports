@@ -45,7 +45,33 @@ class Recipe(object):
     def _error(self, msg, rc=1):
         print('\033[31mError:\033[0m ' + msg)
         sys.exit(rc)
-    
+
+    def cook(self):
+        if 'MESSAGE' in self:
+            self._message('Message')
+            if self['MESSAGE']:
+                print self['MESSAGE']
+                if not self.options.yes:
+                    answer = raw_input('Continue (y/n + enter)? ')
+                    if answer == '':
+                        sys.exit(1)
+                    elif answer[0].lower() == 'y':
+                        print ' ok'
+                    else:
+                        sys.exit(1)
+
+        self.download()
+        self.checksum()
+        self.unpack()
+        if self.options.patch:
+            self.patch()
+        if self.options.build:
+            self.build()
+        if self.options.test:
+            self.test()
+        if self.options.install:
+            self.install()
+
     def retrieve_sources(self):
         raise NotImplementedError
         # download, checksum, unpack
@@ -129,6 +155,7 @@ class Recipe(object):
         raise NotImplementedError
     
     def patch(self, patch):
+        self._message('Patching')
         if not self.check_flag('patch'):
             check_call('patch -p0 -i {0}'.format(patch),
                        shell=True, cwd=self.build_directory)
@@ -196,6 +223,9 @@ class HPB(Parser, Recipe):
     keys = {'DESCRIPTION': RequiredKey([str, list]),
             'HOMEPAGE': RequiredKey([str]),
             'SRC_URI': RequiredKey([str, list]),
+
+            'PORTREV_DESCRIPTION': RequiredKey([str, list]),
+            'MESSAGE': OptionalKey([str, list], None),
             'STATUS_HAIKU': RequiredSelectKey(['untested', 'broken',
                                                'unstable', 'stable']),
             'DEPEND': OptionalKey([str, list, type(None)], None),
@@ -207,7 +237,6 @@ class HPB(Parser, Recipe):
             'TEST': OptionalKey([shell], None),
 
             # not yet supported by the portlog plugin
-            'MESSAGE': OptionalKey([str], None),
             'COPYRIGHT': OptionalKey([str, list], None)
            }
 

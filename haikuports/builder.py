@@ -40,7 +40,7 @@ class Builder(object):
                 if options.clean:
                     recipe.clean_build_directory()
 
-                self.build(recipe)
+                recipe.cook()
             except ValueError:
                 try: 
                     options = list(self.list_options(arguments[0]))
@@ -120,20 +120,6 @@ class Builder(object):
             else:
                 for version in self.source.versions(string):
                     yield string + '-' + version        
-
-    def build(self, recipe):
-        # TODO: move to Recipe.execute()?
-        recipe.download()
-        recipe.checksum()
-        recipe.unpack()
-        if recipe.options.patch:
-            recipe.patch()
-        if recipe.options.build:
-            recipe.build()
-        if recipe.options.test:
-            recipe.test()
-        if recipe.options.install:
-            recipe.install()
 
 
 def main():
