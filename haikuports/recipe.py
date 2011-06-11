@@ -176,10 +176,10 @@ class Recipe(object):
             self._run_script(script)
             self.set_flag('test')
 
-    def install(self, script, target_directory):
-        self._message('Installing to ' + target_directory)
+    def install(self, script):
+        self._message('Installing')
         if not self.check_flag('install'):
-            self._run_script(script, {'DESTDIR': target_directory})
+            self._run_script(script)
             self.set_flag('install')
 
     def clean_build_directory(self):
@@ -281,8 +281,8 @@ class HPB(Parser, Recipe):
     def test(self):
         return super(HPB, self).test(self['TEST'])
 
-    def install(self, target_directory):
-        return super(HPB, self).test(self['INSTALL'], directory, target_directory)
+    def install(self):
+        return super(HPB, self).test(self['INSTALL'])
 
 
 class Scripts(HPB):
@@ -308,7 +308,7 @@ class Scripts(HPB):
     def test(self):
         return Recipe.test(self, self._read_script('test'))
 
-    def install(self, target_directory):
+    def install(self):
         return Recipe.install(self, self._read_script('install'))
 
 
