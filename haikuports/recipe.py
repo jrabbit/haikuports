@@ -38,6 +38,9 @@ class Recipe(object):
         except CalledProcessError:
             print('Error during script execution')
             sys.exit(1)
+        except KeyboardInterrupt:
+            print('Aborted by user')
+            sys.exit(0)
 
     def _message(self, msg):
         print('\033[1m' + msg + '...\033[0m')
