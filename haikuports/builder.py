@@ -10,7 +10,7 @@ from .source import HaikuPortsWebsite, SVNRepository, ResourceNotFound
 
 
 class Builder(object):
-    config_path = '/boot/common/etc/haikuports.conf'
+    config_path = '/etc/haikuports.conf'
     repository_path = 'http://ports.haiku-files.org/svn/haikuports/trunk'
 
     def __init__(self, options, arguments):
@@ -166,6 +166,8 @@ def main():
 #   parser.add_option('-t', '--tree', action='store_true', dest='tree',
 #                     default=False, help="print out the location of the "
 #                                         "haikuports source tree")
+   parser.add_option('-j', action='store_true', type="int", dest='jobs',
+                  default=1, help="the number of concurrent jobs to build with") # Unimplemented.
    parser.add_option('-y', '--yes', action='store_true', dest='yes',
                      default=False, help="answer yes to all questions")
 
