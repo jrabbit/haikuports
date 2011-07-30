@@ -29,6 +29,8 @@ from subprocess import check_call, Popen, CalledProcessError
 from optparse import OptionParser
 from string import Template
 
+import subcommands
+
 # -- HaikuPorts options -------------------------------------------------------
 
 # location of haikuports.conf
@@ -185,6 +187,10 @@ class HaikuPorter:
         if options.list:
             self.searchPorts(None)
             sys.exit()
+        
+        if options.create:
+            uri = args[0]
+            subcommands.create.create(uri)
 
         # if requested, search for a port
         if options.search:
@@ -1336,6 +1342,7 @@ parser.add_option('-j', action='store', type="int", dest='jobs',
                   default=1, help="the number of concurrent jobs to build with")
 parser.add_option('-o','--location', action='store_true', dest='location',
                 default=False, help="print out the location of a bepfile (via search) (for scripted editing)")
+parser.add_option('--create', '-n', action='store_true', dest='create',default=False, help="Create a new skeleton package from a tarball url")                
 parser.add_option('--test', action='store_true', dest='test',
                   default=False, help="run tests on resulting binaries")
 parser.add_option('--lint', action='store_true', dest='lint',
